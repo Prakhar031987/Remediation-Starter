@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-import re
 import base64
 from io import BytesIO
 
@@ -17,73 +16,85 @@ if uploaded_file:
 
     if generate:
         with pdfplumber.open(uploaded_file) as pdf:
-            pages = pdf.pages
-            text = " ".join(page.extract_text() for page in pages if page.extract_text())
+            st.info("Extracting tables from the PDF...")
+            tables = []
+            for page in pdf.pages:
+                tables += page.extract_tables()
 
-        # Extract Correct Answers and Student Responses
-        correct_answers = re.findall(r"Correct Answers.*?(\\b[A-D]\\b.*?)\\n", text)
-        table_text = re.findall(r"Student Performance Table.*?\\n(.*?)\\n\\s*% answered correct", text, re.S)
+        if not tables:
+            st.error("No tables found in the PDF.")
+            st.stop()
 
-        if not correct_answers or not table_text:
-            st.error("Could not extract student performance table or correct answers.")
-        else:
-            corrects = correct_answers[0].split()
-            lines = table_text[0].split("\\n")
-            data = []
-            for line in lines:
-                cols = line.strip().split()
-                if len(cols) > 10:
-                    data.append(cols[:41])
+        # Try to find the Student Performance Table (with 40+ Q columns)
+        target_table = None
+        for table in tables:
+            if any("Correct Answers" in str(cell) for cell in table[0]) and len(table[0]) >= 41:
+                target_table = table
+                break
 
-            df = pd.DataFrame(data, columns=["Name"] + [f"Q{i+1}" for i in range(40)])
+        if not target_table:
+            st.error("Could not locate the student performance table in this PDF.")
+            st.stop()
 
-            # Compute accuracy and option distribution
-            stats = []
-            for i in range(1, 41):
-                col = f"Q{i}"
-                counts = df[col].value_counts(normalize=True)
-                total = df[col].notna().sum()
-                correct = (df[col] == corrects[i-1]).sum()
-                acc = round(100 * correct / total, 1) if total else 0
+        # Parse table
+        header = target_table[0]
+        correct_answers = header[1:41]
+        data = target_table[1:]
 
-                dominant_wrong = ""
-                for opt in ['A', 'B', 'C', 'D']:
-                    pct = round(100 * counts.get(opt, 0), 1)
-                    if opt != corrects[i-1] and pct >= 30:
-                        dominant_wrong = f"{opt}: {pct}%"
-                        break
+        df = pd.DataFrame(data, columns=["Name"] + [f"Q{i+1}" for i in range(40)] + ["Score", "Scaled Score", "Percentile", "Performance"])
+        df = df.fillna("")
 
-                buckets = []
-                if acc < 30:
-                    buckets.append("Difficult")
-                    if not dominant_wrong:
-                        buckets.append("Critical Learning Gap")
-                if dominant_wrong:
-                    buckets.append("Misconception")
-                if acc > 70:
-                    buckets.append("Easy")
+        # Compute question-wise stats
+        stats = []
+        for i in range(1, 41):
+            col = f"Q{i}"
+            correct = correct_answers[i-1]
+            responses = df[col]
+            attempts = responses[responses != ""]
+            total = len(attempts)
+            correct_count = (attempts == correct).sum()
+            acc = round(100 * correct_count / total, 1) if total > 0 else 0
 
-                stats.append({
-                    "Q": i,
-                    "Accuracy%": acc,
-                    "DominantWrongOption%": dominant_wrong,
-                    "Buckets": " | ".join(buckets)
-                })
+            wrong_counts = attempts[attempts != correct].value_counts(normalize=True) * 100
+            dominant_wrong = ""
+            for opt, pct in wrong_counts.items():
+                if pct >= 30:
+                    dominant_wrong = f"{opt}: {round(pct, 1)}%"
+                    break
 
-            summary_df = pd.DataFrame(stats)
-            st.subheader("Dashboard Summary")
-            st.dataframe(summary_df, use_container_width=True)
+            spread = all(pct <= 30 for pct in wrong_counts.values())
+            buckets = []
+            if acc < 30:
+                buckets.append("Difficult")
+                if spread and dominant_wrong == "":
+                    buckets.append("Critical Learning Gap")
+            if dominant_wrong:
+                buckets.append("Misconception")
+            if acc > 70:
+                buckets.append("Easy")
 
-            # Generate downloadable markdown report
-            def generate_report_md(df):
-                lines = ["# Quick Remediation Note\n\n", "## Detailed Table\n"]
-                lines.append("| Q | Accuracy% | DominantWrongOption% | Buckets |\n")
-                lines.append("|----|------------|----------------------|---------|\n")
-                for _, row in df.iterrows():
-                    lines.append(f"| {row['Q']} | {row['Accuracy%']} | {row['DominantWrongOption%']} | {row['Buckets']} |\n")
-                return "".join(lines)
+            stats.append({
+                "Q": i,
+                "Accuracy%": acc,
+                "DominantWrongOption%": dominant_wrong,
+                "Buckets": " | ".join(buckets)
+            })
 
-            report_md = generate_report_md(summary_df)
-            b64 = base64.b64encode(report_md.encode()).decode()
-            href = f'<a href="data:text/markdown;base64,{b64}" download="Quick_Remediation_Note.md">📥 Download Markdown Report</a>'
-            st.markdown(href, unsafe_allow_html=True)
+        summary_df = pd.DataFrame(stats)
+
+        st.subheader("Dashboard Summary")
+        st.dataframe(summary_df, use_container_width=True)
+
+        # Markdown report download
+        def generate_report_md(df):
+            lines = ["# Quick Remediation Note\n\n", "## Detailed Table\n"]
+            lines.append("| Q | Accuracy% | DominantWrongOption% | Buckets |\n")
+            lines.append("|----|------------|----------------------|---------|\n")
+            for _, row in df.iterrows():
+                lines.append(f"| {row['Q']} | {row['Accuracy%']} | {row['DominantWrongOption%']} | {row['Buckets']} |\n")
+            return "".join(lines)
+
+        report_md = generate_report_md(summary_df)
+        b64 = base64.b64encode(report_md.encode()).decode()
+        href = f'<a href="data:text/markdown;base64,{b64}" download="Quick_Remediation_Note.md">📥 Download Markdown Report</a>'
+        st.markdown(href, unsafe_allow_html=True)
