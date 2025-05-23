@@ -19,7 +19,7 @@ if uploaded_file:
             full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
         # Extract correct answers line
-        correct_line = re.findall(r"Correct\s+Answers\s+➔?\s+([A-D\s]+)\n?", full_text)
+        correct_line = re.findall(r"Correct Answers.*?([A-D\s]{40,})", full_text)
         if not correct_line:
             st.error("Correct answers row not found in PDF.")
             st.stop()
@@ -29,8 +29,8 @@ if uploaded_file:
             st.error("Could not find 40 correct answers.")
             st.stop()
 
-        # Extract all student performance lines (name followed by 40 responses)
-        student_rows = re.findall(r"\d{1,2}\s+([A-Za-z\s.]+)\s+([A-D✓\*\s]{40,})", full_text)
+        # Extract student response lines
+        student_rows = re.findall(r"\d{1,2}\s+([A-Za-z\s.]+?)\s+([A-D✓\*\s]{40,})", full_text)
         if not student_rows:
             st.error("Could not extract student responses from the table.")
             st.stop()
@@ -47,13 +47,12 @@ if uploaded_file:
                 elif val in ["A", "B", "C", "D"]:
                     row.append(val)
                 else:
-                    row.append("")  # blank or *
+                    row.append("")
                 i += 1
             data.append([name.strip()] + row)
 
         df = pd.DataFrame(data, columns=["Name"] + [f"Q{i+1}" for i in range(40)])
 
-        # Compute stats
         stats = []
         for i in range(1, 41):
             col = f"Q{i}"
