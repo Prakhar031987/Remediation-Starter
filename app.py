@@ -19,7 +19,8 @@ if uploaded_file:
             full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
         
         # 👇 DEBUG: Show the first 3000 characters of raw text
-        st.text_area("🔎 Raw PDF Text (for debugging)", full_text[:3000])
+        st.download_button("📥 Download Full Extracted Text", full_text, file_name="extracted_text.txt")
+
 
         # Flexible regex for 'Correct Answers' row
         correct_line = re.findall(r"Correct\s*Answers.*?([A-D](?:\s+[A-D]){39})", full_text, re.IGNORECASE)
