@@ -18,8 +18,8 @@ if uploaded_file:
         with pdfplumber.open(uploaded_file) as pdf:
             full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
-        # Extract correct answers line
-        correct_line = re.findall(r"Correct Answers.*?([A-D\s]{40,})", full_text)
+        # Updated: Flexible pattern to match correct answers
+        correct_line = re.findall(r"Correct\s*Answers.*?([A-D](?:\s+[A-D]){39})", full_text, re.IGNORECASE)
         if not correct_line:
             st.error("Correct answers row not found in PDF.")
             st.stop()
