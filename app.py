@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
+import re
 import base64
-from io import BytesIO
 
 st.set_page_config(page_title="Quick Remediation Note Generator")
 st.title("🔍 Generate Your Quick Remediation Note")
@@ -16,50 +16,59 @@ if uploaded_file:
 
     if generate:
         with pdfplumber.open(uploaded_file) as pdf:
-            st.info("Extracting tables from the PDF...")
-            tables = []
-            for page in pdf.pages:
-                tables += page.extract_tables()
+            full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
-        if not tables:
-            st.error("No tables found in the PDF.")
+        # Extract correct answers line
+        correct_line = re.findall(r"Correct\s+Answers\s+➔?\s+([A-D\s]+)\n?", full_text)
+        if not correct_line:
+            st.error("Correct answers row not found in PDF.")
             st.stop()
 
-        # Try to find the Student Performance Table (with 40+ Q columns)
-        target_table = None
-        for table in tables:
-            if any("Correct Answers" in str(cell) for cell in table[0]) and len(table[0]) >= 41:
-                target_table = table
-                break
-
-        if not target_table:
-            st.error("Could not locate the student performance table in this PDF.")
+        correct_answers = correct_line[0].strip().split()
+        if len(correct_answers) != 40:
+            st.error("Could not find 40 correct answers.")
             st.stop()
 
-        # Parse table
-        header = target_table[0]
-        correct_answers = header[1:41]
-        data = target_table[1:]
+        # Extract all student performance lines (name followed by 40 responses)
+        student_rows = re.findall(r"\d{1,2}\s+([A-Za-z\s.]+)\s+([A-D✓\*\s]{40,})", full_text)
+        if not student_rows:
+            st.error("Could not extract student responses from the table.")
+            st.stop()
 
-        df = pd.DataFrame(data, columns=["Name"] + [f"Q{i+1}" for i in range(40)] + ["Score", "Scaled Score", "Percentile", "Performance"])
-        df = df.fillna("")
+        data = []
+        for name, response_line in student_rows:
+            raw = response_line.strip().split()
+            row = []
+            i = 0
+            while len(row) < 40 and i < len(raw):
+                val = raw[i]
+                if val == "✓":
+                    row.append(correct_answers[len(row)])
+                elif val in ["A", "B", "C", "D"]:
+                    row.append(val)
+                else:
+                    row.append("")  # blank or *
+                i += 1
+            data.append([name.strip()] + row)
 
-        # Compute question-wise stats
+        df = pd.DataFrame(data, columns=["Name"] + [f"Q{i+1}" for i in range(40)])
+
+        # Compute stats
         stats = []
         for i in range(1, 41):
             col = f"Q{i}"
             correct = correct_answers[i-1]
             responses = df[col]
-            attempts = responses[responses != ""]
-            total = len(attempts)
-            correct_count = (attempts == correct).sum()
-            acc = round(100 * correct_count / total, 1) if total > 0 else 0
+            attempted = responses[responses != ""]
+            total = len(attempted)
+            correct_count = (attempted == correct).sum()
+            acc = round(100 * correct_count / total, 1) if total else 0
 
-            wrong_counts = attempts[attempts != correct].value_counts(normalize=True) * 100
+            wrong_counts = attempted[attempted != correct].value_counts(normalize=True) * 100
             dominant_wrong = ""
             for opt, pct in wrong_counts.items():
                 if pct >= 30:
-                    dominant_wrong = f"{opt}: {round(pct, 1)}%"
+                    dominant_wrong = f"{opt}: {round(pct,1)}%"
                     break
 
             spread = all(pct <= 30 for pct in wrong_counts.values())
@@ -85,7 +94,6 @@ if uploaded_file:
         st.subheader("Dashboard Summary")
         st.dataframe(summary_df, use_container_width=True)
 
-        # Markdown report download
         def generate_report_md(df):
             lines = ["# Quick Remediation Note\n\n", "## Detailed Table\n"]
             lines.append("| Q | Accuracy% | DominantWrongOption% | Buckets |\n")
