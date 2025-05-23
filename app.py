@@ -17,8 +17,11 @@ if uploaded_file:
     if generate:
         with pdfplumber.open(uploaded_file) as pdf:
             full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+        
+        # 👇 DEBUG: Show the first 3000 characters of raw text
+        st.text_area("🔎 Raw PDF Text (for debugging)", full_text[:3000])
 
-        # Updated: Flexible pattern to match correct answers
+        # Flexible regex for 'Correct Answers' row
         correct_line = re.findall(r"Correct\s*Answers.*?([A-D](?:\s+[A-D]){39})", full_text, re.IGNORECASE)
         if not correct_line:
             st.error("Correct answers row not found in PDF.")
@@ -29,7 +32,6 @@ if uploaded_file:
             st.error("Could not find 40 correct answers.")
             st.stop()
 
-        # Extract student response lines
         student_rows = re.findall(r"\d{1,2}\s+([A-Za-z\s.]+?)\s+([A-D✓\*\s]{40,})", full_text)
         if not student_rows:
             st.error("Could not extract student responses from the table.")
